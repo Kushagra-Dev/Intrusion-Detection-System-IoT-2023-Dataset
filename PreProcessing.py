@@ -1,34 +1,24 @@
-import os
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-def preprocess_data_from_folder(folder_path, force=False):
-    preprocessed_path = os.path.join(folder_path, 'merged_preprocessed.csv')
+def preprocess_data(file_path):
+    print("Loading and preprocessing data...")
+    df = pd.read_csv(file_path, low_memory=False)
 
-    if os.path.exists(preprocessed_path) and not force:
-        print("📦 Cached preprocessed file found. Loading it...")
-        full_df = pd.read_csv(preprocessed_path)
-    else:
-        print("📂 Reading and merging CSV files...")
-        csv_files = [file for file in os.listdir(folder_path) if file.endswith('.csv')]
-        all_dfs = []
+    df.dropna(axis=1, how='all', inplace=True)
+    df.dropna(axis=0, how='any', inplace=True)
 
-        for file in csv_files:
-            file_path = os.path.join(folder_path, file)
-            print(f"Reading: {file_path}")
-            df = pd.read_csv(file_path)
-            all_dfs.append(df)
+    if 'label' not in df.columns:
+        raise ValueError("No 'label' column found")
 
-        full_df = pd.concat(all_dfs, ignore_index=True)
-        full_df.to_csv(preprocessed_path, index=False)
-        print(f"✅ Merged CSV saved to: {preprocessed_path}")
+    df['label'] = df['label'].apply(lambda x: 0 if 'Benign' in str(x) else 1)
 
-    y_true = full_df['label'].apply(lambda x: 'Attack' if x != 'BenignTraffic' else 'Benign')
-    X = full_df.drop(columns=['label'], errors='ignore')
-    X = X.select_dtypes(include=['int64', 'float64'])
-    X.fillna(0, inplace=True)
+    non_numeric_cols = df.select_dtypes(include='object').columns
+    df.drop(non_numeric_cols, axis=1, inplace=True)
 
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    X = scaler.fit_transform(df.drop('label', axis=1))
+    y = df['label'].values
 
-    return X_scaled, X.columns, y_true, full_df
+    print(f"Preprocessing complete. Shape: {X.shape}")
+    return X, y
