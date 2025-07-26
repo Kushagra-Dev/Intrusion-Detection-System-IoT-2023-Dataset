@@ -3,3 +3,36 @@ __pycache__/
 *.csv
 tempCodeRunnerFile.py
 check.py
+
+
+# Ignore OS-generated files
+.DS_Store
+Thumbs.db
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore Node.js
+node_modules/
+
+# Ignore compiled files
+*.o
+*.out
+*.class
+
+# Ignore logs and temporary files
+*.log
+*.tmp
+
+# Ignore environment files
+.env
+
+# Ignore IDE/project files
+.vscode/
+.idea/
+*.swp
+*.gz
+
+opt
+venv

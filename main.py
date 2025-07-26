@@ -18,10 +18,11 @@ import numpy as np
 
 
 
-csv_path = "/Users/kushagra/Downloads/iot23_combined_new.csv"
+csv_path = "opt/Malware-Project/BigDataset/IoTScenarios/CTU-Honeypot-Capture-4-1/bro/conn.log.labeled"
 
 #Step 1: EDA
 run_eda(csv_path)
+
 
 # Step 2: Preprocessing
 X, y = preprocess_data(csv_path)
