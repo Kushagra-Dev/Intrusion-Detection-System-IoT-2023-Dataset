@@ -1,15 +1,16 @@
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 
+
 def preprocess_data(csv_path):
     print("Reading CSV...")
-    df = pd.read_csv(csv_path, low_memory=False)
+    df = pd.read_csv(csv_path, sep='\t', comment='#', low_memory=False)
     print("Initial shape:", df.shape)
 
     # Dropping columns with mostly missing values
-    df.dropna(axis=1, thresh=int(0.5 * len(df)), inplace=True)
+    #df.dropna(axis=1, thresh=int(0.5 * len(df)), inplace=True)
 
-    df.fillna(0, inplace=True)
+    #df.fillna(0, inplace=True)
 
     label_col = 'label'
     if label_col not in df.columns:
