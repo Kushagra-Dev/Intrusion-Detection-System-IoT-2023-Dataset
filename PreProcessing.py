@@ -1,38 +1,75 @@
+import dask.dataframe as dd
+import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from dask_ml.preprocessing import StandardScaler
+from sklearn.feature_extraction import FeatureHasher
+from dask.base import compute
 
+from batch_processing import retdf
 
-def preprocess_data(csv_path):
-    print("Reading CSV...")
-    df = pd.read_csv(csv_path, sep='\t', comment='#', low_memory=False)
-    print("Initial shape:", df.shape)
+def preprocess_data(file_path: str) -> tuple[dd.DataFrame, dd.Series]:
+    """
+    Performs preprocessing using Dask
+    """
+    print(" Starting data preprocessing with Dask...")
+    
+    df = retdf(file_path)
 
-    # Dropping columns with mostly missing values
-    #df.dropna(axis=1, thresh=int(0.5 * len(df)), inplace=True)
+    label_map = df['label'].str.split().str[0].str.strip().map(
+        {'Benign': 0, 'Malicious': 1}, 
+        meta=pd.Series(dtype='int')
+    )
+    df['label'] = label_map.fillna(0).astype(int)
+    
+    y = df['label']
+    X = df.drop(columns=['ts', 'uid', 'label', 'detailed-label'], errors='ignore')
 
-    #df.fillna(0, inplace=True)
+    categorical_features_list = [
+        'id.orig_h', 'id.resp_h', 'proto', 'service', 
+        'conn_state', 'local_orig', 'local_resp', 'history', 'tunnel_parents'
+    ]
+    categorical_features_list = [col for col in categorical_features_list if col in X.columns]
+    numeric_features = [col for col in X.columns if col not in categorical_features_list]
 
-    label_col = 'label'
-    if label_col not in df.columns:
-        raise ValueError(f"Label column '{label_col}' not found in the dataset.")
+    print(" - Using Feature Hashing for all categorical features...")
+    X[categorical_features_list] = X[categorical_features_list].fillna('missing')
+    
+    hasher = FeatureHasher(n_features=10, input_type='dict')
 
-    df[label_col] = df[label_col].astype(str).str.lower().str.strip()
-    df[label_col] = df[label_col].apply(lambda x: 0 if x == 'benign' else 1)
+    def hash_partition(partition):
+        records = partition.to_dict('records')
+        hashed_features = hasher.transform(records)
+        return pd.DataFrame(
+            hashed_features.toarray(), #type: ignore
+            columns=[f'hashed_{i}' for i in range(10)],
+            index=partition.index
+        )
+    
+    meta_df = pd.DataFrame(columns=[f'hashed_{i}' for i in range(10)], dtype=np.float64)
+    hashed_features_dd = X[categorical_features_list].map_partitions(hash_partition, meta=meta_df)
+    
+    X = dd.concat([X[numeric_features], hashed_features_dd], axis=1)
+    all_feature_columns = numeric_features + list(meta_df.columns)
+    
+    print(" - Calculating all means in parallel...")
 
-    non_numeric_cols = df.select_dtypes(include=['object']).columns.drop(label_col, errors='ignore')
-    for col in non_numeric_cols:
-        try:
-            df[col] = LabelEncoder().fit_transform(df[col])
-        except Exception as e:
-            print(f"Could not encode column {col}: {e}")
+    for col in all_feature_columns:
+        X[col] = dd.to_numeric(X[col], errors='coerce')
+        
+    means_to_compute = {col: X[col].mean() for col in all_feature_columns}
+    
+    computed_means = compute(means_to_compute)[0]
+    
+    print(" - Applying means to fill missing values...")
+    X = X.fillna(computed_means)
 
-    print("Label counts after binarization:", df[label_col].value_counts())
-
-    y = df[label_col]
-    X = df.drop(columns=[label_col])
-
-    # Standardize the features
+    print(" - Scaling all features...")
+    X_dask_array = X.to_dask_array(lengths=True)
+    
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    X_scaled = scaler.fit_transform(X_dask_array)
 
-    return X_scaled, y
+    X_final = dd.from_dask_array(X_scaled, columns=all_feature_columns)
+    
+    print(" Preprocessing complete.")
+    return X_final, y
