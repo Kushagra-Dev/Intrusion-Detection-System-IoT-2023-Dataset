@@ -2,8 +2,8 @@ import dask.dataframe as dd
 
 def retdf(file_pattern: str) -> dd.DataFrame:
     """
-    Reads conn.log.labeled file(s) into a Dask DataFrame using a fixed, robust schema
-    and explicit dtypes to prevent parsing errors.
+    Reads conn.log.labeled file(s) into a Dask DataFrame using a fixed schema
+    and explicit dtypes.
     """
     MASTER_COLUMN_LIST = [
         'ts', 'uid', 'id.orig_h', 'id.orig_p', 'id.resp_h', 'id.resp_p',
@@ -27,10 +27,8 @@ def retdf(file_pattern: str) -> dd.DataFrame:
     
     df = dd.read_csv(
         file_pattern,
-        # --- ### THE FIX: Switched from deprecated 'delim_whitespace' to 'sep' ### ---
-        sep=r'\s+',          # Use the recommended regex for any whitespace
-        engine='python',        # The regex separator requires the python engine
-        # --- ### End of Fix ### ---
+        sep=r'\s+',         
+        engine='python',        
         comment='#',
         header=None,
         names=MASTER_COLUMN_LIST,

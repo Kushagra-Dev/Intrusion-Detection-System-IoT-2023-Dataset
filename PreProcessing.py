@@ -1,17 +1,19 @@
+# PreProcessing.py
 import dask.dataframe as dd
+import dask.array as da # <-- Import dask.array
 import numpy as np
 import pandas as pd
 from dask_ml.preprocessing import StandardScaler
-from sklearn.feature_extraction import FeatureHasher
 from dask.base import compute
 
+# This version requires the dask-native data loader
 from batch_processing import retdf
 
 def preprocess_data(file_path: str) -> tuple[dd.DataFrame, dd.Series]:
     """
-    Performs preprocessing using Dask
+    Performs scalable preprocessing with Dask.
     """
-    print(" Starting data preprocessing with Dask...")
+    print("Starting data preprocessing with Dask...")
     
     df = retdf(file_path)
 
@@ -24,52 +26,56 @@ def preprocess_data(file_path: str) -> tuple[dd.DataFrame, dd.Series]:
     y = df['label']
     X = df.drop(columns=['ts', 'uid', 'label', 'detailed-label'], errors='ignore')
 
-    categorical_features_list = [
-        'id.orig_h', 'id.resp_h', 'proto', 'service', 
-        'conn_state', 'local_orig', 'local_resp', 'history', 'tunnel_parents'
-    ]
-    categorical_features_list = [col for col in categorical_features_list if col in X.columns]
-    numeric_features = [col for col in X.columns if col not in categorical_features_list]
+    print(" - Engineering features...")
+    
+    # Create ratio features
+    X['byte_ratio'] = X['orig_bytes'] / (X['resp_bytes'] + 1e-6)
+    X['packet_ratio'] = X['orig_pkts'] / (X['resp_pkts'] + 1e-6)
+    
+    # One-Hot Encode the most common Connection States
+    top_conn_states = ['SF', 'S0', 'REJ', 'RSTO', 'RSTR']
+    for state in top_conn_states:
+        X[f'conn_state_{state}'] = (X['conn_state'] == state).astype(int)
 
-    print(" - Using Feature Hashing for all categorical features...")
-    X[categorical_features_list] = X[categorical_features_list].fillna('missing')
-    
-    hasher = FeatureHasher(n_features=10, input_type='dict')
+    # Manual Label Encoding -
+    print("   - Performing label encoding for categorical features...")
+    low_cardinality_categoricals = ['proto', 'service', 'history']
+    X[low_cardinality_categoricals] = X[low_cardinality_categoricals].fillna('missing')
 
-    def hash_partition(partition):
-        records = partition.to_dict('records')
-        hashed_features = hasher.transform(records)
-        return pd.DataFrame(
-            hashed_features.toarray(), #type: ignore
-            columns=[f'hashed_{i}' for i in range(10)],
-            index=partition.index
-        )
-    
-    meta_df = pd.DataFrame(columns=[f'hashed_{i}' for i in range(10)], dtype=np.float64)
-    hashed_features_dd = X[categorical_features_list].map_partitions(hash_partition, meta=meta_df)
-    
-    X = dd.concat([X[numeric_features], hashed_features_dd], axis=1)
-    all_feature_columns = numeric_features + list(meta_df.columns)
-    
-    print(" - Calculating all means in parallel...")
+    # Compute the unique categories for each column in a single pass
+    unique_categories_to_compute = {col: X[col].unique() for col in low_cardinality_categoricals}
+    computed_uniques = compute(unique_categories_to_compute)[0]
 
-    for col in all_feature_columns:
-        X[col] = dd.to_numeric(X[col], errors='coerce')
+    # Create a mapping for each column and apply it
+    for col in low_cardinality_categoricals:
+        category_map = {category: i for i, category in enumerate(computed_uniques[col])}
+        X[col] = X[col].map(category_map, meta=(col, 'int')).astype(int)
         
-    means_to_compute = {col: X[col].mean() for col in all_feature_columns}
+    # Drop original and noisy columns
+    cols_to_drop = [
+        'id.orig_h', 'id.resp_h', 'conn_state',
+        'orig_bytes', 'resp_bytes', 'orig_pkts', 'resp_pkts'
+    ]
+    X = X.drop(columns=cols_to_drop)
     
-    computed_means = compute(means_to_compute)[0]
-    
-    print(" - Applying means to fill missing values...")
-    X = X.fillna(computed_means)
+    print(" - Imputing missing values...")
+    for col in X.columns:
+        X[col] = dd.to_numeric(X[col], errors='coerce')
+        mean_val = X[col].mean().compute()
+        X[col] = X[col].fillna(mean_val)
 
     print(" - Scaling all features...")
+    X = X.astype(np.float64)
     X_dask_array = X.to_dask_array(lengths=True)
     
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_dask_array)
-
-    X_final = dd.from_dask_array(X_scaled, columns=all_feature_columns)
     
-    print(" Preprocessing complete.")
+    # This replaces any NaN/inf values created by the scaler with 0.
+    print(" - Stabilizing scaled data to prevent PCA errors...")
+    X_scaled = da.nan_to_num(X_scaled)
+
+    X_final = dd.from_dask_array(X_scaled, columns=X.columns)
+    
+    print("Preprocessing complete.")
     return X_final, y
